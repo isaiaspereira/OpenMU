@@ -54,6 +54,17 @@ internal partial class PowerUpDefinitionValue
 internal partial class ConstValueAttribute
 {
     /// <summary>
+    /// Initializes a new instance of the <see cref="ConstValueAttribute"/> class
+    /// using the default <see cref="AggregateType.AddRaw"/> aggregation mode.
+    /// </summary>
+    /// <param name="value">The value.</param>
+    /// <param name="definition">The attribute definition.</param>
+    public ConstValueAttribute(float value, AttributeDefinition definition)
+        : base(value, definition)
+    {
+    }
+
+    /// <summary>
     /// Initializes a new instance of the <see cref="ConstValueAttribute"/> class.
     /// </summary>
     public ConstValueAttribute()
@@ -97,6 +108,13 @@ internal partial class ConstValueAttribute
     {
         get => base.Value;
         set => base.Value = value;
+    }
+
+    /// <inheritdoc />
+    public new AggregateType AggregateType
+    {
+        get => base.AggregateType;
+        set => base.AggregateType = value;
     }
 }
 

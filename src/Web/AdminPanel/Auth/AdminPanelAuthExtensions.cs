@@ -16,7 +16,9 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 using MUnique.OpenMU.Persistence.AdminAuth;
+using MUnique.OpenMU.Web.AdminPanel.Services;
 
 /// <summary>
 /// Extensions which add the authentication of the admin panel.
@@ -24,19 +26,19 @@ using MUnique.OpenMU.Persistence.AdminAuth;
 public static class AdminPanelAuthExtensions
 {
     /// <summary>
-    /// The environment variable which defines the login name of the bootstrap user.
+    /// Gets the environment variable which defines the login name of the bootstrap user.
     /// </summary>
-    public const string BootstrapUserVariableName = "OPENMU_ADMIN_USER";
+    public static string BootstrapUserVariableName => "OPENMU_ADMIN_USER";
 
     /// <summary>
-    /// The environment variable which defines the password of the bootstrap user.
+    /// Gets the environment variable which defines the password of the bootstrap user.
     /// </summary>
-    public const string BootstrapPasswordVariableName = "OPENMU_ADMIN_PASSWORD";
+    public static string BootstrapPasswordVariableName => "OPENMU_ADMIN_PASSWORD";
 
     /// <summary>
-    /// The environment variable which defines the base32 authenticator key of the bootstrap user.
+    /// Gets the environment variable which defines the base32 authenticator key of the bootstrap user.
     /// </summary>
-    public const string BootstrapAuthenticatorKeyVariableName = "OPENMU_ADMIN_TOTP_SECRET";
+    public static string BootstrapAuthenticatorKeyVariableName => "OPENMU_ADMIN_TOTP_SECRET";
 
     /// <summary>
     /// Adds the authentication of the admin panel to the service collection.
@@ -58,17 +60,15 @@ public static class AdminPanelAuthExtensions
             options.BootstrapUser = authOptions.BootstrapUser;
         });
 
-        // The key ring protects the authentication cookies and the authenticator keys. It has to be
-        // persisted, otherwise a restart invalidates all sessions and makes all stored authenticator
-        // keys unreadable. In docker, the directory should be a mounted volume.
-        var keyPath = configuration["AdminPanel:Auth:DataProtectionKeyPath"] ?? "data-protection-keys";
-        services.AddDataProtection()
-            .SetApplicationName("MUnique.OpenMU.AdminPanel")
-            .PersistKeysToFileSystem(new DirectoryInfo(Path.Combine(Directory.GetCurrentDirectory(), keyPath)));
+        services.AddSingleton<ApiKeyRegistry>();
+        services.AddScoped<ApiKeyManagementService>();
+
+        services.AddSingleton(ConfigureDataProtection(services, configuration));
 
         // The hosting application registers the real storage; this is just a fallback which lets
         // the panel start in its initial setup mode instead of failing to resolve its services.
         services.TryAddSingleton<IAdminUserRepository, UnavailableAdminUserRepository>();
+        services.TryAddSingleton<IApiKeyRepository, UnavailableApiKeyRepository>();
 
         services.AddSingleton<AdminUserSecretProtector>();
         services.AddSingleton<IPasswordHasher<AdminUser>, BCryptPasswordHasher>();
@@ -108,7 +108,15 @@ public static class AdminPanelAuthExtensions
                 options.LoginPath = AdminAuthenticationDefaults.LoginPath;
                 options.LogoutPath = AdminAuthenticationDefaults.SignOutEndpointPath;
                 options.AccessDeniedPath = AdminAuthenticationDefaults.AccessDeniedPath;
-            });
+
+                // An API client can't do anything with the login page, so it gets a status code
+                // instead of a redirect to it.
+                options.Events.OnRedirectToLogin = context => RespondWithStatusCodeOnApiPath(context, StatusCodes.Status401Unauthorized);
+                options.Events.OnRedirectToAccessDenied = context => RespondWithStatusCodeOnApiPath(context, StatusCodes.Status403Forbidden);
+            })
+            .AddScheme<AuthenticationSchemeOptions, ApiKeyAuthenticationHandler>(
+                ApiKeyAuthenticationDefaults.AuthenticationScheme,
+                configureOptions: null);
 
         services.AddSingleton<IAuthorizationHandler, AdminAccessRequirementHandler>();
         services.AddAuthorizationBuilder()
@@ -131,6 +139,18 @@ public static class AdminPanelAuthExtensions
     /// <returns>The same instance, to allow chaining of further calls.</returns>
     public static IApplicationBuilder UseAdminPanelAuth(this IApplicationBuilder app)
     {
+        if (app.ApplicationServices.GetService<DataProtectionKeyStorageStatus>() is { Error: { } error } status)
+        {
+            app.ApplicationServices.GetRequiredService<ILoggerFactory>()
+                .CreateLogger(typeof(AdminPanelAuthExtensions))
+                .LogWarning(
+                    error,
+                    "The data protection keys can't be stored at '{Path}', so they are only kept in memory: "
+                    + "everybody is signed out when the application restarts, and stored authenticator keys "
+                    + "become unreadable. Make sure the directory exists and is writable by the user which runs the application.",
+                    status.Path);
+        }
+
         app.UseAuthentication();
         app.UseAuthorization();
         return app;
@@ -168,6 +188,57 @@ public static class AdminPanelAuthExtensions
 
             await next(context).ConfigureAwait(false);
         });
+    }
+
+    private static Task RespondWithStatusCodeOnApiPath(RedirectContext<CookieAuthenticationOptions> context, int statusCode)
+    {
+        if (context.Request.Path.StartsWithSegments(ApiKeyAuthenticationDefaults.ApiPathPrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            context.Response.StatusCode = statusCode;
+            return Task.CompletedTask;
+        }
+
+        context.Response.Redirect(context.RedirectUri);
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Sets the storage of the data protection key ring up.
+    /// </summary>
+    /// <param name="services">The service collection.</param>
+    /// <param name="configuration">The configuration.</param>
+    /// <returns>The result, which is logged when the request pipeline is built.</returns>
+    /// <remarks>
+    /// The key ring protects the authentication cookies and the authenticator keys, so it has to be
+    /// persisted - otherwise a restart invalidates all sessions and makes all stored authenticator
+    /// keys unreadable. In docker, the directory should be a mounted volume.
+    /// It's deliberately not fatal when the directory can't be used: the containers run as a
+    /// non-root user, so a directory which wasn't prepared in the image would otherwise make every
+    /// page of the panel fail with an error as soon as a key is needed.
+    /// </remarks>
+    private static DataProtectionKeyStorageStatus ConfigureDataProtection(IServiceCollection services, IConfiguration configuration)
+    {
+        var keyPath = configuration["AdminPanel:Auth:DataProtectionKeyPath"] ?? "data-protection-keys";
+        var directory = new DirectoryInfo(Path.Combine(Directory.GetCurrentDirectory(), keyPath));
+        var dataProtection = services.AddDataProtection().SetApplicationName("MUnique.OpenMU.AdminPanel");
+
+        try
+        {
+            directory.Create();
+
+            // Creating an existing directory succeeds even without write access to it, so the
+            // access is checked explicitly - a mounted volume may belong to another user.
+            var probeFilePath = Path.Combine(directory.FullName, ".write-probe");
+            File.WriteAllBytes(probeFilePath, Array.Empty<byte>());
+            File.Delete(probeFilePath);
+
+            dataProtection.PersistKeysToFileSystem(directory);
+            return new DataProtectionKeyStorageStatus(directory.FullName, null);
+        }
+        catch (Exception ex)
+        {
+            return new DataProtectionKeyStorageStatus(directory.FullName, ex);
+        }
     }
 
     private static void ApplyEnvironmentVariables(AdminPanelAuthOptions options)

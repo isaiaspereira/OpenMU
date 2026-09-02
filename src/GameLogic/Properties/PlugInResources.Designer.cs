@@ -304,6 +304,24 @@ namespace MUnique.OpenMU.GameLogic.Properties {
         }
 
         /// <summary>
+        ///   Looks up a localized string similar to Shows Land of Trials availability and its applicable entry fee..
+        /// </summary>
+        public static string CastleSiegeGuardsmanTalkPlugIn_Description {
+            get {
+                return ResourceManager.GetString("CastleSiegeGuardsmanTalkPlugIn_Description", resourceCulture);
+            }
+        }
+
+        /// <summary>
+        ///   Looks up a localized string similar to Castle Siege Guardsman.
+        /// </summary>
+        public static string CastleSiegeGuardsmanTalkPlugIn_Name {
+            get {
+                return ResourceManager.GetString("CastleSiegeGuardsmanTalkPlugIn_Name", resourceCulture);
+            }
+        }
+
+        /// <summary>
         ///   Looks up a localized string similar to Drives the weekly Castle Siege state cycle..
         /// </summary>
         public static string CastleSiegePlugIn_Description {
@@ -2498,6 +2516,24 @@ namespace MUnique.OpenMU.GameLogic.Properties {
         public static string SetStatChatCommandPlugIn_Name {
             get {
                 return ResourceManager.GetString("SetStatChatCommandPlugIn_Name", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to Updates and resets the shield recovery hiatus attribute..
+        /// </summary>
+        public static string ShieldRecoveryHiatusPlugIn_Description {
+            get {
+                return ResourceManager.GetString("ShieldRecoveryHiatusPlugIn_Description", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to Shield Recovery Hiatus.
+        /// </summary>
+        public static string ShieldRecoveryHiatusPlugIn_Name {
+            get {
+                return ResourceManager.GetString("ShieldRecoveryHiatusPlugIn_Name", resourceCulture);
             }
         }
         

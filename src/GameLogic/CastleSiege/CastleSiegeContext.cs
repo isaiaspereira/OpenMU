@@ -126,6 +126,26 @@ public class CastleSiegeContext : IEventStateProvider
     public TimeSpan RemainingTime => this.GetRemainingTime(DateTime.UtcNow);
 
     /// <summary>
+    /// Gets or sets the player whose active Crown attempt was announced to the client.
+    /// </summary>
+    internal Player? PreviousCrownUser { get; set; }
+
+    /// <summary>
+    /// Gets or sets the UTC time of the previous Crown progress update.
+    /// </summary>
+    internal DateTime LastCrownUpdateUtc { get; set; }
+
+    /// <summary>
+    /// Gets the switch information which was last broadcast to the siege map, keyed by network object identifier.
+    /// </summary>
+    internal Dictionary<ushort, CastleSiegeSwitchInfo> LastBroadcastSwitchInfos { get; } = [];
+
+    /// <summary>
+    /// Gets or sets the Crown availability which was last broadcast to the siege map.
+    /// </summary>
+    internal bool? LastBroadcastCrownAvailability { get; set; }
+
+    /// <summary>
     /// Gets a value indicating whether the context has been initialized.
     /// </summary>
     internal bool IsInitialized { get; private set; }
@@ -154,6 +174,16 @@ public class CastleSiegeContext : IEventStateProvider
     /// Gets or sets the next NPC persistence time.
     /// </summary>
     internal DateTime NextNpcSaveUtc { get; set; } = DateTime.MaxValue;
+
+    /// <summary>
+    /// Gets or sets the next economy persistence time.
+    /// </summary>
+    internal DateTime NextEconomySaveUtc { get; set; } = DateTime.MinValue;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether the in-memory economy state needs to be persisted.
+    /// </summary>
+    internal bool IsEconomyPersistencePending { get; set; }
 
     /// <summary>
     /// Gets or sets the next participant tracking time.
@@ -252,6 +282,7 @@ public class CastleSiegeContext : IEventStateProvider
 
         CopyScalarState(this.SiegeData, persistentData);
         await context.SaveChangesAsync().ConfigureAwait(false);
+        this.IsEconomyPersistencePending = false;
     }
 
     /// <summary>
@@ -385,8 +416,12 @@ public class CastleSiegeContext : IEventStateProvider
     internal void InitializeBattleOwner()
     {
         this.MiddleOwnerGuildId = this.FinalGuildList.Values
-            .FirstOrDefault(guild => guild.Side == CastleSiegeJoinSide.Defense && guild.IsAllianceMaster)
-            ?.GuildId;
+                                      .FirstOrDefault(guild => guild.Side == CastleSiegeJoinSide.Defense
+                                                               && guild.PersistentGuildId == this.SiegeData.OwnerGuildId)
+                                      ?.GuildId
+                                  ?? this.FinalGuildList.Values
+                                      .FirstOrDefault(guild => guild.Side == CastleSiegeJoinSide.Defense && guild.IsAllianceMaster)
+                                      ?.GuildId;
     }
 
     /// <summary>
